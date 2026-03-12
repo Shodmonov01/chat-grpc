@@ -1,0 +1,23 @@
+{
+  "name": "chat-grpc",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server.js",
+    "proxy": "npx @grpc-web/proxy --target http://127.0.0.1:50051 --listen 9000 --origin http://localhost:5173",
+    "dev": "concurrently -n grpc,proxy \"npm run start\" \"npm run proxy\"",
+    "test": "node test-server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.3",
+    "@grpc/proto-loader": "^0.8.0",
+    "@grpc-web/proxy": "^0.1.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
