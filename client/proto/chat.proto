@@ -3,13 +3,23 @@ syntax = "proto3";
 package chat;
 
 service ChatService {
-  // Bidi — для нативных клиентов (браузер не поддерживает streaming request)
+  // Двунаправленный стриминг (чат)
   rpc Chat (stream ChatMessage) returns (stream ChatMessage);
-  // Subscribe — server streaming, работает в браузере
+
+  // Подписка на комнату (только получение)
   rpc Subscribe (SubscribeRequest) returns (stream ChatMessage);
-  // SendMessage — unary, работает в браузере
+
+  // Отправить текстовое сообщение
   rpc SendMessage (ChatMessage) returns (Empty);
+
+  // Загрузить чанк файла (unary RPC, вызывается последовательно по чанкам)
+  rpc UploadChunk (FileChunk) returns (UploadChunkResponse);
+
+  // Скачать файл (сервер стримит чанки → клиент собирает)
+  rpc DownloadFile (FileRequest) returns (stream FileChunk);
 }
+
+// ─── Существующие сообщения ───────────────────────────────────────────────
 
 message SubscribeRequest {
   string user_id  = 1;
@@ -24,7 +34,55 @@ message ChatMessage {
   string username   = 2;
   string text       = 3;
   int64  timestamp  = 4;
-  string room       = 5;     // поддержка комнат
-  bool   join       = 6;     // флаг "я присоединился"
-  bool   leave      = 7;     // флаг "я вышел"
+  string room       = 5;
+  bool   join       = 6;
+  bool   leave      = 7;
+
+  // Опционально: уведомление о файле в чате
+  FileInfo file     = 8;
+}
+
+// ─── Файловые сообщения ───────────────────────────────────────────────────
+
+// Метаданные файла (первый чанк или отдельный ответ)
+message FileInfo {
+  string file_id    = 1;  // UUID, генерируется сервером
+  string filename   = 2;  // Оригинальное имя файла
+  string mime_type  = 3;  // MIME-тип (image/png, application/pdf, ...)
+  int64  size       = 4;  // Размер в байтах
+  string room       = 5;  // Комната, куда прикреплён файл
+  string user_id    = 6;  // Кто загрузил
+  string username   = 7;
+  int64  timestamp  = 8;
+}
+
+// Один чанк файла при стриминге
+message FileChunk {
+  // Только в первом чанке (метаданные)
+  FileInfo info     = 1;
+
+  // Бинарные данные (во всех чанках, кроме первого info-only)
+  bytes  data       = 2;
+
+  // Порядковый номер чанка (0, 1, 2, ...)
+  int32  chunk_seq  = 3;
+
+  // true в последнем чанке
+  bool   is_last    = 4;
+
+  // ID сессии загрузки (генерируется клиентом, передаётся во всех чанках)
+  string upload_id  = 5;
+}
+
+// Ответ на UploadChunk
+message UploadChunkResponse {
+  string upload_id  = 1;  // Echo для клиента
+  int32  chunk_seq  = 2;
+  bool   accepted   = 3;
+  FileInfo file_info = 4;  // Только при is_last
+}
+
+// Запрос на скачивание
+message FileRequest {
+  string file_id = 1;
 }

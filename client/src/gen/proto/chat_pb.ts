@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file proto/chat.proto.
  */
 export const file_proto_chat: GenFile = /*@__PURE__*/
-  fileDesc("ChBwcm90by9jaGF0LnByb3RvEgRjaGF0IkMKEFN1YnNjcmliZVJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRIQCgh1c2VybmFtZRgCIAEoCRIMCgRyb29tGAMgASgJIgcKBUVtcHR5InwKC0NoYXRNZXNzYWdlEg8KB3VzZXJfaWQYASABKAkSEAoIdXNlcm5hbWUYAiABKAkSDAoEdGV4dBgDIAEoCRIRCgl0aW1lc3RhbXAYBCABKAMSDAoEcm9vbRgFIAEoCRIMCgRqb2luGAYgASgIEg0KBWxlYXZlGAcgASgIMqgBCgtDaGF0U2VydmljZRIwCgRDaGF0EhEuY2hhdC5DaGF0TWVzc2FnZRoRLmNoYXQuQ2hhdE1lc3NhZ2UoATABEjgKCVN1YnNjcmliZRIWLmNoYXQuU3Vic2NyaWJlUmVxdWVzdBoRLmNoYXQuQ2hhdE1lc3NhZ2UwARItCgtTZW5kTWVzc2FnZRIRLmNoYXQuQ2hhdE1lc3NhZ2UaCy5jaGF0LkVtcHR5YgZwcm90bzM");
+  fileDesc("ChBwcm90by9jaGF0LnByb3RvEgRjaGF0IkMKEFN1YnNjcmliZVJlcXVlc3QSDwoHdXNlcl9pZBgBIAEoCRIQCgh1c2VybmFtZRgCIAEoCRIMCgRyb29tGAMgASgJIgcKBUVtcHR5IpoBCgtDaGF0TWVzc2FnZRIPCgd1c2VyX2lkGAEgASgJEhAKCHVzZXJuYW1lGAIgASgJEgwKBHRleHQYAyABKAkSEQoJdGltZXN0YW1wGAQgASgDEgwKBHJvb20YBSABKAkSDAoEam9pbhgGIAEoCBINCgVsZWF2ZRgHIAEoCBIcCgRmaWxlGAggASgLMg4uY2hhdC5GaWxlSW5mbyKSAQoIRmlsZUluZm8SDwoHZmlsZV9pZBgBIAEoCRIQCghmaWxlbmFtZRgCIAEoCRIRCgltaW1lX3R5cGUYAyABKAkSDAoEc2l6ZRgEIAEoAxIMCgRyb29tGAUgASgJEg8KB3VzZXJfaWQYBiABKAkSEAoIdXNlcm5hbWUYByABKAkSEQoJdGltZXN0YW1wGAggASgDIm4KCUZpbGVDaHVuaxIcCgRpbmZvGAEgASgLMg4uY2hhdC5GaWxlSW5mbxIMCgRkYXRhGAIgASgMEhEKCWNodW5rX3NlcRgDIAEoBRIPCgdpc19sYXN0GAQgASgIEhEKCXVwbG9hZF9pZBgFIAEoCSJwChNVcGxvYWRDaHVua1Jlc3BvbnNlEhEKCXVwbG9hZF9pZBgBIAEoCRIRCgljaHVua19zZXEYAiABKAUSEAoIYWNjZXB0ZWQYAyABKAgSIQoJZmlsZV9pbmZvGAQgASgLMg4uY2hhdC5GaWxlSW5mbyIeCgtGaWxlUmVxdWVzdBIPCgdmaWxlX2lkGAEgASgJMpkCCgtDaGF0U2VydmljZRIwCgRDaGF0EhEuY2hhdC5DaGF0TWVzc2FnZRoRLmNoYXQuQ2hhdE1lc3NhZ2UoATABEjgKCVN1YnNjcmliZRIWLmNoYXQuU3Vic2NyaWJlUmVxdWVzdBoRLmNoYXQuQ2hhdE1lc3NhZ2UwARItCgtTZW5kTWVzc2FnZRIRLmNoYXQuQ2hhdE1lc3NhZ2UaCy5jaGF0LkVtcHR5EjkKC1VwbG9hZENodW5rEg8uY2hhdC5GaWxlQ2h1bmsaGS5jaGF0LlVwbG9hZENodW5rUmVzcG9uc2USNAoMRG93bmxvYWRGaWxlEhEuY2hhdC5GaWxlUmVxdWVzdBoPLmNoYXQuRmlsZUNodW5rMAFiBnByb3RvMw");
 
 /**
  * @generated from message chat.SubscribeRequest
@@ -77,25 +77,26 @@ export type ChatMessage = Message<"chat.ChatMessage"> & {
   timestamp: bigint;
 
   /**
-   * поддержка комнат
-   *
    * @generated from field: string room = 5;
    */
   room: string;
 
   /**
-   * флаг "я присоединился"
-   *
    * @generated from field: bool join = 6;
    */
   join: boolean;
 
   /**
-   * флаг "я вышел"
-   *
    * @generated from field: bool leave = 7;
    */
   leave: boolean;
+
+  /**
+   * Опционально: уведомление о файле в чате
+   *
+   * @generated from field: chat.FileInfo file = 8;
+   */
+  file?: FileInfo;
 };
 
 /**
@@ -106,11 +107,183 @@ export const ChatMessageSchema: GenMessage<ChatMessage> = /*@__PURE__*/
   messageDesc(file_proto_chat, 2);
 
 /**
+ * Метаданные файла (первый чанк или отдельный ответ)
+ *
+ * @generated from message chat.FileInfo
+ */
+export type FileInfo = Message<"chat.FileInfo"> & {
+  /**
+   * UUID, генерируется сервером
+   *
+   * @generated from field: string file_id = 1;
+   */
+  fileId: string;
+
+  /**
+   * Оригинальное имя файла
+   *
+   * @generated from field: string filename = 2;
+   */
+  filename: string;
+
+  /**
+   * MIME-тип (image/png, application/pdf, ...)
+   *
+   * @generated from field: string mime_type = 3;
+   */
+  mimeType: string;
+
+  /**
+   * Размер в байтах
+   *
+   * @generated from field: int64 size = 4;
+   */
+  size: bigint;
+
+  /**
+   * Комната, куда прикреплён файл
+   *
+   * @generated from field: string room = 5;
+   */
+  room: string;
+
+  /**
+   * Кто загрузил
+   *
+   * @generated from field: string user_id = 6;
+   */
+  userId: string;
+
+  /**
+   * @generated from field: string username = 7;
+   */
+  username: string;
+
+  /**
+   * @generated from field: int64 timestamp = 8;
+   */
+  timestamp: bigint;
+};
+
+/**
+ * Describes the message chat.FileInfo.
+ * Use `create(FileInfoSchema)` to create a new message.
+ */
+export const FileInfoSchema: GenMessage<FileInfo> = /*@__PURE__*/
+  messageDesc(file_proto_chat, 3);
+
+/**
+ * Один чанк файла при стриминге
+ *
+ * @generated from message chat.FileChunk
+ */
+export type FileChunk = Message<"chat.FileChunk"> & {
+  /**
+   * Только в первом чанке (метаданные)
+   *
+   * @generated from field: chat.FileInfo info = 1;
+   */
+  info?: FileInfo;
+
+  /**
+   * Бинарные данные (во всех чанках, кроме первого info-only)
+   *
+   * @generated from field: bytes data = 2;
+   */
+  data: Uint8Array;
+
+  /**
+   * Порядковый номер чанка (0, 1, 2, ...)
+   *
+   * @generated from field: int32 chunk_seq = 3;
+   */
+  chunkSeq: number;
+
+  /**
+   * true в последнем чанке
+   *
+   * @generated from field: bool is_last = 4;
+   */
+  isLast: boolean;
+
+  /**
+   * ID сессии загрузки (генерируется клиентом, передаётся во всех чанках)
+   *
+   * @generated from field: string upload_id = 5;
+   */
+  uploadId: string;
+};
+
+/**
+ * Describes the message chat.FileChunk.
+ * Use `create(FileChunkSchema)` to create a new message.
+ */
+export const FileChunkSchema: GenMessage<FileChunk> = /*@__PURE__*/
+  messageDesc(file_proto_chat, 4);
+
+/**
+ * Ответ на UploadChunk
+ *
+ * @generated from message chat.UploadChunkResponse
+ */
+export type UploadChunkResponse = Message<"chat.UploadChunkResponse"> & {
+  /**
+   * Echo для клиента
+   *
+   * @generated from field: string upload_id = 1;
+   */
+  uploadId: string;
+
+  /**
+   * @generated from field: int32 chunk_seq = 2;
+   */
+  chunkSeq: number;
+
+  /**
+   * @generated from field: bool accepted = 3;
+   */
+  accepted: boolean;
+
+  /**
+   * Только при is_last
+   *
+   * @generated from field: chat.FileInfo file_info = 4;
+   */
+  fileInfo?: FileInfo;
+};
+
+/**
+ * Describes the message chat.UploadChunkResponse.
+ * Use `create(UploadChunkResponseSchema)` to create a new message.
+ */
+export const UploadChunkResponseSchema: GenMessage<UploadChunkResponse> = /*@__PURE__*/
+  messageDesc(file_proto_chat, 5);
+
+/**
+ * Запрос на скачивание
+ *
+ * @generated from message chat.FileRequest
+ */
+export type FileRequest = Message<"chat.FileRequest"> & {
+  /**
+   * @generated from field: string file_id = 1;
+   */
+  fileId: string;
+};
+
+/**
+ * Describes the message chat.FileRequest.
+ * Use `create(FileRequestSchema)` to create a new message.
+ */
+export const FileRequestSchema: GenMessage<FileRequest> = /*@__PURE__*/
+  messageDesc(file_proto_chat, 6);
+
+/**
  * @generated from service chat.ChatService
  */
 export const ChatService: GenService<{
   /**
-   * Bidi — для нативных клиентов (браузер не поддерживает streaming request)
+   * Двунаправленный стриминг (чат)
    *
    * @generated from rpc chat.ChatService.Chat
    */
@@ -120,7 +293,7 @@ export const ChatService: GenService<{
     output: typeof ChatMessageSchema;
   },
   /**
-   * Subscribe — server streaming, работает в браузере
+   * Подписка на комнату (только получение)
    *
    * @generated from rpc chat.ChatService.Subscribe
    */
@@ -130,7 +303,7 @@ export const ChatService: GenService<{
     output: typeof ChatMessageSchema;
   },
   /**
-   * SendMessage — unary, работает в браузере
+   * Отправить текстовое сообщение
    *
    * @generated from rpc chat.ChatService.SendMessage
    */
@@ -138,6 +311,26 @@ export const ChatService: GenService<{
     methodKind: "unary";
     input: typeof ChatMessageSchema;
     output: typeof EmptySchema;
+  },
+  /**
+   * Загрузить чанк файла (unary RPC, вызывается последовательно по чанкам)
+   *
+   * @generated from rpc chat.ChatService.UploadChunk
+   */
+  uploadChunk: {
+    methodKind: "unary";
+    input: typeof FileChunkSchema;
+    output: typeof UploadChunkResponseSchema;
+  },
+  /**
+   * Скачать файл (сервер стримит чанки → клиент собирает)
+   *
+   * @generated from rpc chat.ChatService.DownloadFile
+   */
+  downloadFile: {
+    methodKind: "server_streaming";
+    input: typeof FileRequestSchema;
+    output: typeof FileChunkSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_proto_chat, 0);

@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package chat;
+
+service ChatService {
+  rpc Chat (stream ChatMessage) returns (stream ChatMessage);
+  rpc Subscribe (SubscribeRequest) returns (stream ChatMessage);
+  rpc SendMessage (ChatMessage) returns (Empty);
+}
+
+message SubscribeRequest {
+  string user_id  = 1;
+  string username = 2;
+  string room     = 3;
+}
+
+message Empty {}
+
+message ChatMessage {
+  string user_id    = 1;
+  string username   = 2;
+  string text       = 3;
+  int64  timestamp  = 4;
+  string room       = 5;     // поддержка комнат
+  bool   join       = 6;     // флаг "я присоединился"
+  bool   leave      = 7;     // флаг "я вышел"
+}

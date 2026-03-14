@@ -13,9 +13,10 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@grpc-web/proxy": "^0.1.0",
     "@grpc/grpc-js": "^1.14.3",
     "@grpc/proto-loader": "^0.8.0",
-    "@grpc-web/proxy": "^0.1.0"
+    "busboy": "^1.6.0"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
