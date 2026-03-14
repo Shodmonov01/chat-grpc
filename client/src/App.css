@@ -1,4 +1,9 @@
 /* Chat layout */
+html,
+body {
+  background: #0f0f13;
+}
+
 .chat {
   min-height: 100vh;
   /* background: #0f0f13; */
