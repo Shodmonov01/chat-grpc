@@ -22,11 +22,11 @@ const packageDefinition = protoLoader.loadSync('./chat.proto', {
 const chatProto = grpc.loadPackageDefinition(packageDefinition).chat;
 
 const client = new chatProto.ChatService(
-  '127.0.0.1:50051',
+  '127.0.0.1:50052',
   grpc.credentials.createInsecure()
 );
 
-const CHUNK_SIZE = 64 * 1024; // 64 КБ за чанк
+const CHUNK_SIZE = 512 * 1024; // 512 КБ за чанк
 
 // ─── MIME helper ──────────────────────────────────────────────────────────
 
@@ -34,7 +34,7 @@ function getMimeType(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   const map = {
     '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-    '.png': 'image/png',  '.gif': 'image/gif',
+    '.png': 'image/png', '.gif': 'image/gif',
     '.webp': 'image/webp', '.pdf': 'application/pdf',
     '.txt': 'text/plain', '.csv': 'text/csv',
     '.zip': 'application/zip',
@@ -160,7 +160,7 @@ async function downloadFile(fileId, outputPath) {
 
 // ─── CLI ──────────────────────────────────────────────────────────────────
 
-const [,, command, ...args] = process.argv;
+const [, , command, ...args] = process.argv;
 
 if (command === 'upload') {
   const [filePath, room, username, userId] = args;

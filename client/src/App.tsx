@@ -108,6 +108,7 @@ export const App: React.FC = () => {
       setUploadProgress(0);
       setError(null);
 
+      console.time("upload");
       try {
         const buffer = await file.arrayBuffer();
         const data = new Uint8Array(buffer);
@@ -165,6 +166,7 @@ export const App: React.FC = () => {
       } catch (e) {
         setError(`Ошибка загрузки: ${(e as Error).message}`);
       } finally {
+        console.timeEnd("upload");
         setUploading(false);
         setUploadProgress(0);
       }

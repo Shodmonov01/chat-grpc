@@ -1,4 +1,4 @@
-export const CHUNK_SIZE = 64 * 1024; // 64 KB
+export const CHUNK_SIZE = 512 * 1024; // 512 KB
 export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 const MIME_MAP: Record<string, string> = {

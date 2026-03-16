@@ -4,7 +4,7 @@ const protoLoader = require('@grpc/proto-loader');
 const packageDefinition = protoLoader.loadSync('./chat.proto');
 const chatProto = grpc.loadPackageDefinition(packageDefinition).chat;
 
-const client = new chatProto.ChatService('localhost:50051', grpc.credentials.createInsecure());
+const client = new chatProto.ChatService('localhost:50052', grpc.credentials.createInsecure());
 
 const call = client.Chat();
 

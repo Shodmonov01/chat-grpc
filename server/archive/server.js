@@ -95,9 +95,9 @@ function handleChat(call) {
   call.on('data', (msg) => {
     // Первое сообщение — join / авторизация
     if (!myUserId) {
-      myUserId    = msg.user_id    || `user_${Date.now().toString(36)}`;
-      myUsername  = msg.username   || 'Anonymous';
-      myRoom      = msg.room       || 'general';
+      myUserId = msg.user_id || `user_${Date.now().toString(36)}`;
+      myUsername = msg.username || 'Anonymous';
+      myRoom = msg.room || 'general';
 
       if (!rooms.has(myRoom)) rooms.set(myRoom, new Set());
       rooms.get(myRoom).add(call);
@@ -179,7 +179,7 @@ function main() {
     SendMessage: handleSendMessage
   });
 
-  const PORT = process.env.PORT || 50051;
+  const PORT = process.env.PORT || 50052;
   const credentials = grpc.ServerCredentials.createInsecure(); // для прод → TLS!
 
   server.bindAsync(`0.0.0.0:${PORT}`, credentials, (err, port) => {

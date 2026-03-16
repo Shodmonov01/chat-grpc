@@ -16,7 +16,7 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
 const chatProto = grpc.loadPackageDefinition(packageDefinition).chat;
 
 const client = new chatProto.ChatService(
-  '127.0.0.1:50051',
+  '127.0.0.1:50052',
   grpc.credentials.createInsecure()
 );
 

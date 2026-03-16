@@ -4,7 +4,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
-    "proxy": "npx @grpc-web/proxy --target http://127.0.0.1:50051 --listen 9000 --origin http://localhost:5173",
+    "proxy": "npx @grpc-web/proxy --target http://127.0.0.1:50052 --listen 1000 --origin http://localhost:5173",
     "dev": "concurrently -n grpc,proxy \"npm run start\" \"npm run proxy\"",
     "test": "node test-server.js"
   },

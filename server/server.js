@@ -290,7 +290,7 @@
 //     DownloadFile: handleDownloadFile
 //   });
 
-//   const PORT = process.env.PORT || 50051;
+//   const PORT = process.env.PORT || 50052;
 //   server.bindAsync(`0.0.0.0:${PORT}`, grpc.ServerCredentials.createInsecure(), (err, port) => {
 //     if (err) { console.error('Ошибка запуска:', err); process.exit(1); }
 //     console.log(`gRPC чат-сервер запущен на порту ${port}`);
@@ -318,7 +318,7 @@ const chatProto = grpc.loadPackageDefinition(packageDefinition).chat;
 
 // ─── Общие хранилища ──────────────────────────────────────────────────────
 
-const rooms    = new Map(); // room → Set<call>
+const rooms = new Map(); // room → Set<call>
 const fileStore = new Map(); // fileId → { info, buffer }
 // upload_id → { info, chunks: Buffer[] } — временные сессии загрузки
 const uploadSessions = new Map();
@@ -341,7 +341,7 @@ function broadcast(room, message) {
   if (!rooms.has(room)) return;
   for (const call of rooms.get(room)) {
     if (!call.writableEnded && !call.destroyed) {
-      try { call.write(message); } catch (_) {}
+      try { call.write(message); } catch (_) { }
     }
   }
 }
@@ -367,9 +367,9 @@ function handleChat(call) {
 
   call.on('data', (msg) => {
     if (!myUserId) {
-      myUserId   = msg.user_id  || `user_${Date.now().toString(36)}`;
+      myUserId = msg.user_id || `user_${Date.now().toString(36)}`;
       myUsername = msg.username || 'Anonymous';
-      myRoom     = msg.room     || 'general';
+      myRoom = msg.room || 'general';
       if (!rooms.has(myRoom)) rooms.set(myRoom, new Set());
       rooms.get(myRoom).add(call);
       console.log(`→ ${myUsername} joined ${myRoom}`);
@@ -396,7 +396,7 @@ function handleSubscribe(call) {
   console.log(`→ [Subscribe] ${username} joined ${room}`);
   broadcast(room, { user_id: 'system', username: 'System', text: `${username} joined the room`, timestamp: Date.now(), room, join: true });
   call.on('cancelled', () => removeFromRoom(room, call, username));
-  call.on('end',       () => removeFromRoom(room, call, username));
+  call.on('end', () => removeFromRoom(room, call, username));
 }
 
 function handleSendMessage(call, callback) {
@@ -409,7 +409,7 @@ function handleSendMessage(call, callback) {
   callback(null, {});
 }
 
-const CHUNK_SIZE = 64 * 1024;
+const CHUNK_SIZE = 512 * 1024;
 
 // ─── UploadChunk (unary RPC по чанкам) ──────────────────────────────────────
 
@@ -527,14 +527,14 @@ function main() {
   const server = new grpc.Server();
 
   server.addService(chatProto.ChatService.service, {
-    Chat:         handleChat,
-    Subscribe:    handleSubscribe,
-    SendMessage:  handleSendMessage,
-    UploadChunk:  handleUploadChunk,
+    Chat: handleChat,
+    Subscribe: handleSubscribe,
+    SendMessage: handleSendMessage,
+    UploadChunk: handleUploadChunk,
     DownloadFile: handleDownloadFile,
   });
 
-  const GRPC_PORT = process.env.PORT || 50051;
+  const GRPC_PORT = process.env.PORT || 50052;
 
   server.bindAsync(`0.0.0.0:${GRPC_PORT}`, grpc.ServerCredentials.createInsecure(), (err, port) => {
     if (err) { console.error('gRPC error:', err); process.exit(1); }

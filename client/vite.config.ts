@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      "/chat.ChatService": { target: "http://localhost:9000", changeOrigin: true },
+      "/chat.ChatService": { target: "http://localhost:1000", changeOrigin: true },
     },
   },
 })
