@@ -1,0 +1,377 @@
+import { Meta } from '@storybook/addon-docs/blocks';
+
+<Meta title="Docs/gRPC & ConnectRPC — Продвинутые темы" />
+
+# gRPC & ConnectRPC — Продвинутые темы
+
+---
+
+## Версионирование `.proto`
+
+### Почему версионирование важно
+
+Фронт и бэк деплоятся независимо. Пока бэкенд обновляется — старые клиенты ещё живут.
+Если неосторожно изменить `.proto`, старый клиент сломается молча — без ошибки компиляции.
+
+### Что можно делать безопасно ✅
+
+```protobuf
+message User {
+  int32  id    = 1;
+  string name  = 2;
+  string email = 3;
+
+  // ✅ Добавить новое поле — безопасно
+  // Старые клиенты просто проигнорируют его
+  string avatar_url = 4;
+}
+```
+
+```protobuf
+service UserService {
+  rpc GetUser(GetUserRequest) returns (User);
+
+  // ✅ Добавить новый метод — безопасно
+  rpc SearchUsers(SearchRequest) returns (SearchResponse);
+}
+```
+
+### Что ломает обратную совместимость ❌
+
+```protobuf
+message User {
+  int32  id       = 1;
+  // ❌ Переименование поля — ломает клиентов на других языках
+  string username = 2;  // было: name
+
+  // ❌ Изменение типа поля
+  int64  id_new   = 1;  // было int32
+
+  // ❌ Изменение номера поля — данные перепутаются
+  string email    = 5;  // было: 3
+}
+```
+
+### Правильное удаление поля — `reserved`
+
+Нельзя просто удалить поле. Нужно зарезервировать его номер и имя:
+
+```protobuf
+message User {
+  // Поле удалено, но номер и имя зарезервированы навсегда
+  reserved 3;
+  reserved "phone";
+
+  int32  id    = 1;
+  string name  = 2;
+  string email = 4;  // следующий свободный номер — 4, не 3
+}
+```
+
+Если кто-то случайно добавит поле с номером `3` или именем `phone` — компилятор выдаст ошибку.
+
+### Версионирование через package
+
+Когда изменения всё же breaking — создаём новую версию пакета:
+
+```
+proto/
+├── user/
+│   ├── v1/
+│   │   └── user.proto   ← package user.v1 — старая версия, не трогаем
+│   └── v2/
+│       └── user.proto   ← package user.v2 — новая версия
+```
+
+```protobuf
+// user/v2/user.proto
+syntax = "proto3";
+
+package user.v2;  // ← новый пакет
+
+message User {
+  string id    = 1;  // теперь string вместо int32
+  string name  = 2;
+  string email = 3;
+}
+```
+
+Обе версии живут параллельно. Клиенты мигрируют постепенно.
+
+### `buf breaking` — автоматическая проверка
+
+Buf умеет находить breaking changes до деплоя:
+
+```bash
+# Сравниваем с main веткой
+buf breaking --against '.git#branch=main'
+
+# Сравниваем с конкретным тегом
+buf breaking --against '.git#tag=v1.0.0'
+```
+
+Пример вывода при нарушении:
+
+```
+proto/user/v1/user.proto:4:3:Field "1" on message "User" changed type
+  from "TYPE_INT32" to "TYPE_INT64".
+proto/user/v1/user.proto:5:3:Field "2" on message "User" changed name
+  from "name" to "username".
+```
+
+> ⚠️ Добавь `buf breaking` в CI — это ловит проблемы до того, как они доедут до клиентов.
+
+---
+
+## Interceptors — перехват запросов
+
+Interceptor в ConnectRPC — это middleware для клиента. Работает как `axios.interceptors`, но типизированный.
+
+### Зачем нужны
+
+- добавить `Authorization` заголовок ко всем запросам
+- логировать каждый вызов (метод, время, статус)
+- централизованно обработать `Code.Unauthenticated` (редирект на логин)
+- retry-логика при `Code.Unavailable`
+
+### Структура interceptor
+
+```typescript
+import { Interceptor } from "@connectrpc/connect";
+
+const myInterceptor: Interceptor = (next) => async (req) => {
+  // 👆 до запроса
+  const response = await next(req);
+  // 👆 после запроса
+  return response;
+};
+```
+
+### Interceptor для авторизации
+
+```typescript
+// interceptors/authInterceptor.ts
+import { Interceptor } from "@connectrpc/connect";
+
+export const authInterceptor: Interceptor = (next) => async (req) => {
+  const token = localStorage.getItem("access_token");
+
+  if (token) {
+    req.header.set("Authorization", `Bearer ${token}`);
+  }
+
+  return await next(req);
+};
+```
+
+### Interceptor для логирования
+
+```typescript
+// interceptors/loggingInterceptor.ts
+import { Interceptor } from "@connectrpc/connect";
+
+export const loggingInterceptor: Interceptor = (next) => async (req) => {
+  const start = performance.now();
+  const method = req.method.name;
+
+  console.log(`[gRPC] → ${method}`, req.message);
+
+  try {
+    const response = await next(req);
+    const ms = Math.round(performance.now() - start);
+    console.log(`[gRPC] ✅ ${method} (${ms}ms)`, response.message);
+    return response;
+  } catch (err) {
+    const ms = Math.round(performance.now() - start);
+    console.error(`[gRPC] ❌ ${method} (${ms}ms)`, err);
+    throw err;
+  }
+};
+```
+
+### Interceptor для обработки 401
+
+```typescript
+// interceptors/authErrorInterceptor.ts
+import { Interceptor, ConnectError, Code } from "@connectrpc/connect";
+
+export const authErrorInterceptor: Interceptor = (next) => async (req) => {
+  try {
+    return await next(req);
+  } catch (err) {
+    if (err instanceof ConnectError && err.code === Code.Unauthenticated) {
+      // токен протух — редирект на логин
+      localStorage.removeItem("access_token");
+      window.location.href = "/login";
+    }
+    throw err;
+  }
+};
+```
+
+### Подключение interceptors к транспорту
+
+```typescript
+// transport.ts
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { authInterceptor } from "./interceptors/authInterceptor";
+import { loggingInterceptor } from "./interceptors/loggingInterceptor";
+import { authErrorInterceptor } from "./interceptors/authErrorInterceptor";
+
+export const transport = createConnectTransport({
+  baseUrl: "http://localhost:8080",
+  // interceptors выполняются слева направо
+  interceptors: [loggingInterceptor, authInterceptor, authErrorInterceptor],
+});
+```
+
+> 💡 Порядок interceptors важен. `loggingInterceptor` первым — логирует всё включая добавленный токен.
+> `authErrorInterceptor` последним — ловит ошибки после всех остальных.
+
+---
+
+## Тестирование — моки для ConnectRPC
+
+### Проблема
+
+В тестах не хочется поднимать реальный сервер. Нужно мокать `createClient` так, чтобы:
+- тест был изолированным
+- можно было проверить что клиент вызвался с нужными аргументами
+- можно было симулировать ошибки
+
+### Создаём typed mock-клиент
+
+```typescript
+// test-utils/mockClient.ts
+import { ConnectError, Code } from "@connectrpc/connect";
+import { User } from "../gen/user/v1/user_pb";
+
+// Типизированный мок — повторяет интерфейс реального клиента
+export function createMockUserClient(overrides?: {
+  getUser?: (req: { id: number }) => Promise<User>;
+}) {
+  return {
+    getUser: overrides?.getUser ?? jest.fn().mockResolvedValue({
+      id: 1,
+      name: "Test User",
+      email: "test@example.com",
+    }),
+  };
+}
+```
+
+### Мокаем через `jest.mock`
+
+```typescript
+// hooks/useUser.test.ts
+import { renderHook, waitFor } from "@testing-library/react";
+import { ConnectError, Code } from "@connectrpc/connect";
+import { useUser } from "./useUser";
+
+// Мокаем модуль transport целиком
+jest.mock("../transport", () => ({
+  transport: {},
+}));
+
+// Мокаем createClient
+const mockGetUser = jest.fn();
+
+jest.mock("@connectrpc/connect", () => ({
+  ...jest.requireActual("@connectrpc/connect"),
+  createClient: () => ({
+    getUser: mockGetUser,
+  }),
+}));
+
+describe("useUser", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("возвращает пользователя при успешном запросе", async () => {
+    mockGetUser.mockResolvedValue({
+      id: 1,
+      name: "Иван",
+      email: "ivan@example.com",
+    });
+
+    const { result } = renderHook(() => useUser(1));
+
+    expect(result.current.loading).toBe(true);
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.user?.name).toBe("Иван");
+    expect(result.current.error).toBeNull();
+    expect(mockGetUser).toHaveBeenCalledWith({ id: 1 });
+  });
+
+  it("возвращает ошибку при ConnectError", async () => {
+    mockGetUser.mockRejectedValue(
+      new ConnectError("Пользователь не найден", Code.NotFound)
+    );
+
+    const { result } = renderHook(() => useUser(99));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.user).toBeNull();
+    expect(result.current.error).toContain("NotFound");
+  });
+});
+```
+
+### Тест для Server Streaming
+
+```typescript
+// hooks/useUserStream.test.ts
+import { renderHook, waitFor } from "@testing-library/react";
+import { useUserStream } from "./useUserStream";
+
+const mockListUsers = jest.fn();
+
+jest.mock("@connectrpc/connect", () => ({
+  ...jest.requireActual("@connectrpc/connect"),
+  createClient: () => ({
+    listUsers: mockListUsers,
+  }),
+}));
+
+// Хелпер: создаёт AsyncIterable из массива
+async function* toAsyncIterable<T>(items: T[]) {
+  for (const item of items) {
+    yield item;
+  }
+}
+
+describe("useUserStream", () => {
+  it("накапливает пользователей из стрима", async () => {
+    const fakeUsers = [
+      { user: { id: 1, name: "Алиса", email: "alice@example.com" } },
+      { user: { id: 2, name: "Боб",   email: "bob@example.com" } },
+    ];
+
+    mockListUsers.mockReturnValue(toAsyncIterable(fakeUsers));
+
+    const { result } = renderHook(() => useUserStream());
+
+    await waitFor(() => {
+      expect(result.current.done).toBe(true);
+    });
+
+    expect(result.current.users).toHaveLength(2);
+    expect(result.current.users[0].name).toBe("Алиса");
+    expect(result.current.users[1].name).toBe("Боб");
+  });
+});
+```
+
+> 💡 `async function* toAsyncIterable()` — стандартный паттерн для мока стримов в тестах.
+> Возвращает `AsyncIterable` из обычного массива, что идеально имитирует Server Streaming.
+
+---
+

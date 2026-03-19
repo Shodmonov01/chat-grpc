@@ -1,0 +1,612 @@
+import { Meta } from '@storybook/addon-docs/blocks';
+
+<Meta title="Docs/Проект chat-grpc — Документация" />
+
+# Проект chat-grpc — Документация
+
+## Введение
+
+**chat-grpc** — realtime-чат с поддержкой текстовых сообщений и загрузки файлов. Фронтенд (React + TypeScript) общается с бэкендом через **gRPC-Web** и **ConnectRPC**. Контракт описан в `.proto` файлах, код генерируется через **Buf**.
+
+### Что это даёт
+
+- **Строгая типизация** — типы сообщений и RPC генерируются из контракта, не пишутся руками
+- **Единый контракт** — клиент и сервер используют один источник правды (`proto/chat.proto`)
+- **Realtime** — Server Streaming для подписки на комнату без WebSocket
+- **Файлы** — загрузка и скачивание по чанкам (512 KB), поддержка до 50 MB
+
+### Стек
+
+| Слой | Технология |
+|------|------------|
+| Клиент | React 19, TypeScript, Vite |
+| Транспорт | gRPC-Web, ConnectRPC |
+
+---
+
+## Архитектура
+
+```
+┌─────────────────┐     gRPC-Web      ┌──────────────┐     gRPC      ┌─────────────────┐
+│  React Client   │ ─────────────────▶│  Proxy :1000  │ ─────────────▶│  Node.js Server  │
+│  (Vite, :5173)  │                   │  @grpc-web   │               │  (@grpc/grpc-js) │
+└─────────────────┘                   └──────────────┘               └─────────────────┘
+        │                                       │                              │
+        │ createGrpcWebTransport                │                              │
+        │ + interceptors                        │                              │
+        ▼                                       │                              ▼
+   chatClient.subscribe()                  localhost:50052              rooms, fileStore
+   chatClient.sendMessage()
+   chatClient.uploadChunk()
+   chatClient.downloadFile()
+```
+
+**Почему gRPC-Web + Proxy:** Классический gRPC использует HTTP/2 на низком уровне — браузеры не дают полного доступа к фреймам. gRPC-Web преобразует запросы в HTTP/1.1, прокси (`@grpc-web/proxy`) переводит их обратно в gRPC для Node.js сервера.
+
+### Поток данных
+
+1. Пользователь вводит имя и комнату → нажимает «Войти»
+2. Клиент вызывает `Subscribe()` → получает `AsyncIterable<ChatMessage>`
+3. Сервер добавляет стрим в `rooms.get(room)` и при каждом `broadcast()` пишет в все стримы
+4. Отправка сообщения: `SendMessage()` → сервер `broadcast()` → все подписчики получают
+5. Загрузка файла: последовательные `UploadChunk()` → сервер собирает в `uploadSessions` → при `is_last` сохраняет в `fileStore` и `broadcast()` с `FileInfo`
+
+---
+
+## Жизненный цикл пользователя
+
+```
+[LoginForm]  →  username, room  →  connect()
+                    │
+                    ▼
+[Subscribe]  →  stream: for await (msg) addMessage(msg)
+                    │
+                    ├── join-сообщение (username вошёл)
+                    ├── текстовые сообщения
+                    ├── file-сообщения (кто загрузил файл)
+                    └── leave-сообщение (username вышел)
+                    │
+[ChatInput]  →  sendMessage() / uploadFile()
+                    │
+[ChatHeader]  →  disconnect()  →  abortRef.abort()  →  стрим завершается
+```
+
+При `disconnect()` вызывается `abortController.abort()` — стрим `Subscribe` прерывается, `for await` выбрасывает `AbortError`, который обрабатывается в `catch` и не показывается пользователю.
+
+---
+
+## Структура проекта
+
+```
+chat-grpc/
+├── client/                         # React-приложение
+│   ├── proto/
+│   │   └── chat.proto              # Контракт: сообщения и сервис
+│   ├── src/
+│   │   ├── api/
+│   │   │   ├── chatClient.ts       # gRPC-клиент + transport
+│   │   │   └── interceptors/
+│   │   │       ├── loggingInterceptor.ts
+│   │   │       ├── authInterceptor.ts
+│   │   │       └── authErrorInterceptor.ts
+│   │   ├── gen/proto/
+│   │   │   └── chat_pb.ts          # Сгенерированные типы и ChatService
+│   │   ├── components/
+│   │   │   ├── ChatHeader.tsx
+│   │   │   ├── ChatInput.tsx
+│   │   │   ├── FileMessage.tsx
+│   │   │   ├── LoginForm.tsx
+│   │   │   ├── MessageList.tsx
+│   │   │   ├── UploadButton.tsx
+│   │   │   ├── UploadStatus.tsx
+│   │   │   └── index.ts
+│   │   ├── constants/
+│   │   │   └── file.ts             # CHUNK_SIZE, MIME, formatBytes
+│   │   ├── types/
+│   │   │   └── chat.ts             # MessageItem
+│   │   ├── App.tsx
+│   │   ├── App.css
+│   │   └── main.tsx
+│   ├── buf.yaml
+│   └── buf.gen.yaml
+│
+├── server/                         # Node.js gRPC-сервер
+│   ├── chat.proto                  # Копия контракта
+│   ├── server.js                   # Обработчики RPC, rooms, fileStore
+│   └── package.json
+```
+
+---
+
+## Контракт `.proto`
+
+Файл `proto/chat.proto` описывает сервис и сообщения.
+
+### Полный контракт
+
+```protobuf
+syntax = "proto3";
+
+package chat;
+
+service ChatService {
+  rpc Chat (stream ChatMessage) returns (stream ChatMessage);
+  rpc Subscribe (SubscribeRequest) returns (stream ChatMessage);
+  rpc SendMessage (ChatMessage) returns (Empty);
+  rpc UploadChunk (FileChunk) returns (UploadChunkResponse);
+  rpc DownloadFile (FileRequest) returns (stream FileChunk);
+}
+
+message SubscribeRequest {
+  string user_id  = 1;
+  string username = 2;
+  string room     = 3;
+}
+
+message Empty {}
+
+message ChatMessage {
+  string user_id    = 1;
+  string username   = 2;
+  string text       = 3;
+  int64  timestamp  = 4;
+  string room       = 5;
+  bool   join       = 6;
+  bool   leave      = 7;
+  FileInfo file     = 8;
+}
+
+message FileInfo {
+  string file_id    = 1;
+  string filename   = 2;
+  string mime_type  = 3;
+  int64  size       = 4;
+  string room       = 5;
+  string user_id    = 6;
+  string username   = 7;
+  int64  timestamp  = 8;
+}
+
+message FileChunk {
+  FileInfo info     = 1;
+  bytes    data     = 2;
+  int32    chunk_seq = 3;
+  bool     is_last   = 4;
+  string   upload_id = 5;
+}
+
+message UploadChunkResponse {
+  string upload_id   = 1;
+  int32  chunk_seq   = 2;
+  bool   accepted    = 3;
+  FileInfo file_info = 4;
+}
+
+message FileRequest {
+  string file_id = 1;
+}
+```
+
+### Сервис ChatService
+
+| RPC | Тип | Описание |
+|-----|-----|----------|
+| `Chat` | Bidirectional Streaming | Двунаправленный чат (не используется в текущей реализации) |
+| `Subscribe` | Server Streaming | Подписка на комнату — поток сообщений |
+| `SendMessage` | Unary | Отправка текстового сообщения |
+| `UploadChunk` | Unary | Загрузка чанка файла (вызывается последовательно) |
+| `DownloadFile` | Server Streaming | Скачивание файла чанками |
+
+### Основные сообщения
+
+| Сообщение | Назначение |
+|-----------|------------|
+| `SubscribeRequest` | user_id, username, room — вход в комнату |
+| `ChatMessage` | Текст, timestamp, join/leave, file (FileInfo) |
+| `FileChunk` | info, data, chunk_seq, is_last, upload_id |
+| `FileInfo` | file_id, filename, mime_type, size, room, user_id, username |
+| `UploadChunkResponse` | upload_id, chunk_seq, accepted, file_info |
+| `FileRequest` | file_id — запрос на скачивание |
+
+---
+
+## Генерация кода (Buf)
+
+### buf.yaml
+
+```yaml
+version: v2
+```
+
+### buf.gen.yaml
+
+```yaml
+version: v2
+inputs:
+  - directory: .
+    paths:
+      - proto
+plugins:
+  - local: protoc-gen-es
+    out: src/gen
+    opt:
+      - target=ts
+```
+
+### Команды
+
+```bash
+# Генерация TypeScript из .proto
+npx buf generate
+
+# Линт схем
+npx buf lint
+
+# Проверка breaking changes
+npx buf breaking --against '.git#branch=main'
+```
+
+После `buf generate` в `src/gen/proto/` появляется `chat_pb.ts` с типами сообщений и дескриптором `ChatService`. Один файл — protoc-gen-es v2 генерирует и типы, и `GenService` для `createClient`.
+
+---
+
+## Транспорт и Interceptors
+
+### chatClient.ts
+
+```typescript
+import { createClient } from "@connectrpc/connect";
+import { createGrpcWebTransport } from "@connectrpc/connect-web";
+import { ChatService } from "../gen/proto/chat_pb";
+import { authErrorInterceptor } from "./interceptors/authErrorInterceptor";
+import { authInterceptor } from "./interceptors/authInterceptor";
+import { loggingInterceptor } from "./interceptors/loggingInterceptor";
+
+const transport = createGrpcWebTransport({
+  baseUrl: "http://localhost:1000",
+  interceptors: [loggingInterceptor, authInterceptor, authErrorInterceptor],
+});
+
+export const chatClient = createClient(ChatService, transport);
+```
+
+`baseUrl` указывает на прокси. В продакшене замени на URL бэкенда.
+
+### Interceptors
+
+| Interceptor | Назначение |
+|-------------|------------|
+| `loggingInterceptor` | Логирует метод, URL, время, успех/ошибку в консоль |
+| `authInterceptor` | Добавляет `Authorization: Bearer <token>` из localStorage |
+| `authErrorInterceptor` | При `Code.Unauthenticated` очищает токен и редиректит на `/` |
+
+Порядок важен: logging первым (видит всё), authError последним (ловит ошибки).
+
+### Пример вывода loggingInterceptor
+
+```
+[gRPC] → Subscribe http://localhost:1000/chat.ChatService/Subscribe
+[gRPC] ✅ Subscribe stream started (12ms)
+[gRPC] → SendMessage http://localhost:1000/chat.ChatService/SendMessage
+[gRPC] ✅ SendMessage (8ms) {}
+```
+
+---
+
+## Сервер: как устроен server.js
+
+### Хранилища
+
+| Переменная | Тип | Назначение |
+|------------|-----|------------|
+| `rooms` | `Map<string, Set<call>>` | Комната → активные стримы Subscribe |
+| `fileStore` | `Map<string, { info, buffer }>` | file_id → метаданные и бинарные данные |
+| `uploadSessions` | `Map<string, { info, chunks, totalSize }>` | upload_id → сессия загрузки |
+
+### Обработчики
+
+- **Subscribe**: добавляет стрим в `rooms`, при `cancelled`/`end` — `removeFromRoom` + `broadcast` leave
+- **SendMessage**: `broadcast(room, msg)` — все подписчики получают сообщение
+- **UploadChunk**: chunk_seq=0 → создаёт сессию; chunk_seq>0 → накапливает data; is_last → сохраняет в fileStore, `broadcast` с FileInfo
+- **DownloadFile**: Server Streaming — первый чанк с info, далее data по 512 KB
+
+### Ограничения
+
+- `MAX_FILE_SIZE = 50 MB`
+- `ALLOWED_MIME` — whitelist MIME-типов (jpeg, png, pdf, zip, docx, xlsx и др.)
+
+---
+
+## Паттерны использования
+
+### Создание сообщений
+
+Используется `create()` из `@bufbuild/protobuf` и Schema из сгенерированного кода:
+
+```typescript
+import { create } from "@bufbuild/protobuf";
+import { SubscribeRequestSchema, ChatMessageSchema } from "./gen/proto/chat_pb";
+
+const req = create(SubscribeRequestSchema, {
+  userId: crypto.randomUUID(),
+  username: "Alice",
+  room: "general",
+});
+
+const msg = create(ChatMessageSchema, {
+  userId,
+  username,
+  text: "Hello!",
+  timestamp: BigInt(Date.now()),  // int64 в proto → BigInt в TS
+  room,
+});
+```
+
+> ⚠️ Поля `int64` в proto маппятся на `bigint` в TypeScript. Используй `BigInt(Date.now())` и `0n` для размера. При отображении: `Number(msg.timestamp)`.
+
+### Server Streaming (Subscribe)
+
+```typescript
+const stream = chatClient.subscribe(
+  create(SubscribeRequestSchema, { userId, username, room }),
+  { signal: abortController.signal }
+);
+
+for await (const msg of stream) {
+  addMessage(msg);
+}
+```
+
+При размонтировании — `abortController.abort()` для корректного завершения стрима.
+
+### Unary (SendMessage, UploadChunk)
+
+```typescript
+await chatClient.sendMessage(create(ChatMessageSchema, { ... }));
+
+await chatClient.uploadChunk(
+  create(FileChunkSchema, {
+    uploadId,
+    chunkSeq: 0,
+    isLast: false,
+    data: new Uint8Array(0),
+    info: create(FileInfoSchema, { filename, mimeType, ... }),
+  })
+);
+```
+
+### Протокол загрузки файла по чанкам
+
+```
+Клиент                                    Сервер
+   │                                         │
+   │  UploadChunk(upload_id, chunk_seq=0,    │
+   │    info={filename, mimeType, room...})  │
+   │ ──────────────────────────────────────▶│  Создаёт uploadSessions[upload_id]
+   │                                         │
+   │  UploadChunkResponse(accepted)          │
+   │ ◀────────────────────────────────────── │
+   │                                         │
+   │  UploadChunk(upload_id, chunk_seq=1,    │
+   │    data=[512KB], is_last=false)          │
+   │ ──────────────────────────────────────▶│  session.chunks.push(data)
+   │                                         │
+   │  ... (повтор для каждого чанка)          │
+   │                                         │
+   │  UploadChunk(upload_id, chunk_seq=N,    │
+   │    data=[остаток], is_last=true)        │
+   │ ──────────────────────────────────────▶│  fileStore.set(file_id, {info, buffer})
+   │                                         │  broadcast(room, ChatMessage{file})
+   │  UploadChunkResponse(file_info)         │
+   │ ◀────────────────────────────────────── │
+```
+
+1. **Первый чанк** (chunk_seq: 0, is_last: false): только `info` с метаданными, `data` пустой.
+2. **Средние чанки**: `data` по 512 KB, `chunk_seq` инкрементируется.
+3. **Последний чанк**: `is_last: true`, остаток данных.
+4. **Пустой файл**: после chunk 0 сразу chunk 1 с `is_last: true`, `data` пустой.
+
+```typescript
+const CHUNK_SIZE = 512 * 1024; // 512 KB
+const data = new Uint8Array(await file.arrayBuffer());
+
+for (let offset = 0; offset < data.length; offset += CHUNK_SIZE) {
+  const slice = data.slice(offset, offset + CHUNK_SIZE);
+  const isLast = offset + CHUNK_SIZE >= data.length;
+  await chatClient.uploadChunk(
+    create(FileChunkSchema, { uploadId, chunkSeq: seq++, isLast, data: slice })
+  );
+}
+```
+
+### Скачивание файла (Server Streaming)
+
+Сервер отправляет: первый чанк с `info` (метаданные), далее чанки с `data`. Клиент собирает `data` в массив и создаёт `Blob`.
+
+```typescript
+const stream = chatClient.downloadFile(
+  create(FileRequestSchema, { fileId })
+);
+
+const chunks: Uint8Array[] = [];
+for await (const chunk of stream) {
+  if (chunk.data?.length) chunks.push(chunk.data);
+}
+
+const blob = new Blob(chunks, { type: file.mimeType });
+const url = URL.createObjectURL(blob);
+const a = document.createElement("a");
+a.href = url;
+a.download = file.filename;
+a.click();
+URL.revokeObjectURL(url);
+```
+
+---
+
+## Компоненты
+
+### App — корневой компонент
+
+Содержит всё состояние: `username`, `room`, `messages`, `connected`, `error`, `uploading`, `uploadProgress`. Ключевые refs: `abortRef` (AbortController для Subscribe), `userIdRef` (UUID пользователя), `messagesEndRef` (скролл вниз).
+
+**Логика connect:**
+- Создаёт AbortController
+- Вызывает `chatClient.subscribe()` с `signal`
+- `for await (const msg of stream) addMessage(msg)`
+- В `catch`: если не AbortError — показываем ошибку
+- В `finally`: `setConnected(false)`, очистка
+
+**Логика disconnect:** `abortRef.current?.abort()` — стрим прерывается.
+
+### Компоненты и props
+
+| Компонент | Props | Описание |
+|-----------|-------|----------|
+| `LoginForm` | username, room, onUsernameChange, onRoomChange, onConnect | Ввод имени и комнаты, Enter → onConnect |
+| `ChatHeader` | room, onLeave | Бейдж комнаты, кнопка «Выйти» |
+| `MessageList` | messages, messagesEndRef | Список сообщений, ref для скролла |
+| `ChatInput` | inputText, onInputChange, onSend, onUpload, uploading, uploadProgress | Поле ввода, кнопки, прогресс |
+| `FileMessage` | file (FileInfo) | Карточка файла, кнопка скачивания |
+| `UploadButton` | onUpload, disabled | Скрытый input[type=file], кнопка 📎 |
+| `UploadStatus` | progress | «Загрузка… N%» + прогресс-бар |
+
+### Типы данных
+
+```typescript
+// types/chat.ts
+import type { FileInfo } from "../gen/proto/chat_pb";
+
+export interface MessageItem {
+  id: string;
+  username: string;
+  text: string;
+  timestamp: number;
+  isJoin?: boolean;
+  isLeave?: boolean;
+  file?: FileInfo;
+}
+```
+
+`id` формируется как `${userId}-${timestamp}-${random}` для уникальности в списке.
+
+### Стили (App.css)
+
+Используется БЭМ-подобная схема: `.chat`, `.chat__card`, `.chat__title`, `.chat__input`, `.chat__message-author`, `.chat__file-card`, `.chat__error` и т.д.
+
+---
+
+## Константы и утилиты
+
+### constants/file.ts
+
+| Константа/функция | Значение / описание |
+|-------------------|---------------------|
+| `CHUNK_SIZE` | 512 KB — размер чанка при загрузке/скачивании |
+| `MAX_FILE_SIZE` | 50 MB — лимит размера файла |
+| `getMimeType(filename)` | MIME по расширению (jpg→image/jpeg, pdf→application/pdf и др.) |
+| `getMimeIcon(mimeType)` | Эмодзи-иконка (🖼️ для изображений, 📄 для PDF и т.д.) |
+| `formatBytes(bytes)` | Форматирование размера (B, KB, MB) |
+
+Поддерживаемые MIME: jpeg, png, gif, webp, pdf, txt, csv, zip, docx, xlsx.
+
+---
+
+## Обработка ошибок
+
+| Ситуация | Обработка |
+|----------|-----------|
+| `AbortError` (disconnect) | Игнорируется, не показываем пользователю |
+| Ошибка Subscribe | `setError(message)` |
+| Ошибка SendMessage | `setError(message)` |
+| Ошибка UploadChunk | `setError("Ошибка загрузки: ...")` |
+| Ошибка DownloadFile | `console.error`, кнопка остаётся активной |
+| `Code.Unauthenticated` | authErrorInterceptor: очистка токена, редирект на `/` |
+
+Для типизированной обработки ConnectError:
+
+```typescript
+import { ConnectError, Code } from "@connectrpc/connect";
+
+try {
+  await chatClient.sendMessage(...);
+} catch (err) {
+  if (err instanceof ConnectError) {
+    if (err.code === Code.NotFound) { /* ... */ }
+    if (err.code === Code.InvalidArgument) { /* ... */ }
+  }
+}
+```
+
+---
+
+## Запуск
+
+### Сервер
+
+```bash
+cd server
+npm install
+npm run dev   # gRPC-сервер + proxy (concurrently)
+```
+
+- gRPC-сервер: `localhost:50052`
+- Proxy (gRPC-Web): `localhost:1000`
+
+Команда `dev` запускает оба процесса через `concurrently`.
+
+### Клиент
+
+```bash
+cd client
+npm install
+npx buf generate   # при изменении proto
+npm run dev        # Vite dev server на :5173
+```
+
+Клиент по умолчанию подключается к `http://localhost:1000` (proxy).
+
+---
+
+## Зависимости
+
+### Client (runtime)
+
+- `@bufbuild/protobuf` — работа с сообщениями (`create`, Schema)
+- `@connectrpc/connect` — createClient, Interceptor, ConnectError, Code
+- `@connectrpc/connect-web` — createGrpcWebTransport
+- `react`, `react-dom`
+
+### Client (dev)
+
+- `@bufbuild/buf` — CLI для proto
+- `@bufbuild/protoc-gen-es` — генерация TypeScript
+- `vite`, `typescript`
+
+### Server
+
+- `@grpc/grpc-js` — gRPC-сервер
+- `@grpc/proto-loader` — загрузка .proto
+- `@grpc-web/proxy` — прокси gRPC-Web → gRPC
+- `concurrently` — запуск сервера и прокси
+
+---
+
+## Рекомендации
+
+1. **Версионирование proto** — при breaking changes используй `package chat.v2` и `buf breaking` в CI.
+2. **Interceptors** — при добавлении JWT сохраняй токен в `localStorage` под ключом `access_token`; authInterceptor и authErrorInterceptor уже настроены.
+3. **Тестирование** — мокай `chatClient` или `createClient` через `jest.mock`; для стримов используй `async function* toAsyncIterable(items)`.
+4. **Файлы** — в продакшене замени in-memory `fileStore` на S3, MinIO или GridFS.
+5. **baseUrl** — вынеси в переменную окружения (например `VITE_GRPC_URL`) для разных окружений.
+
+---
+
+## Типичные проблемы
+
+| Проблема | Решение |
+|----------|---------|
+| «Failed to fetch» / CORS | Убедись, что proxy запущен и слушает на 1000; проверь `--origin` в proxy. |
+| Стрим не завершается при выходе | Проверь, что `disconnect` вызывает `abortRef.abort()`. |
+| Файл не скачивается | Проверь, что `file.fileId` передан в `FileRequest`; сервер возвращает `NOT_FOUND` если файл не в fileStore. |
+| Ошибка «First chunk must contain info» | Первый UploadChunk должен иметь `chunk_seq: 0` и заполненный `info`. |

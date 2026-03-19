@@ -1,0 +1,312 @@
+import { Meta } from '@storybook/addon-docs/blocks';
+
+<Meta title="Docs/Как читать .proto файлы" />
+
+# Как читать и понимать .proto файлы
+
+Руководство по чтению Protocol Buffers: как понять структуру данных и что отправлять в каждом RPC-вызове.
+
+---
+
+## Что такое .proto
+
+`.proto` файл — это **контракт** между клиентом и сервером. Он описывает:
+- **Сообщения** (`message`) — структуры данных, как JSON-объекты
+- **Сервисы** (`service`) — методы, которые можно вызвать, и их входы/выходы
+
+Один файл — единый источник правды. И клиент, и сервер генерируют из него код.
+
+---
+
+## Структура .proto файла
+
+```protobuf
+syntax = "proto3";     // Версия синтаксиса (proto2 или proto3)
+package chat;          // Имя пакета (namespace)
+
+service ChatService {  // Сервис = набор RPC-методов
+  rpc MethodName(InputType) returns (OutputType);
+}
+
+message SomeMessage {  // Сообщение = структура данных
+  string field_name = 1;  // тип имя = номер_поля
+}
+```
+
+---
+
+## Как читать RPC-метод
+
+Строка `rpc` говорит: **что отправить** и **что получить**.
+
+```protobuf
+rpc Subscribe (SubscribeRequest) returns (stream ChatMessage);
+```
+
+| Часть | Значение |
+|-------|----------|
+| `Subscribe` | Имя метода — вызываешь `client.subscribe(...)` |
+| `SubscribeRequest` | **Вход** — один объект этого типа |
+| `stream ChatMessage` | **Выход** — поток (много) объектов ChatMessage |
+
+### Ключевые слова `stream`
+
+| Запись | Значение |
+|--------|----------|
+| `(Message)` | Один запрос |
+| `(stream Message)` | Поток запросов (клиент шлёт много) |
+| `returns (Message)` | Один ответ |
+| `returns (stream Message)` | Поток ответов (сервер шлёт много) |
+
+**Примеры:**
+- `rpc SendMessage (ChatMessage) returns (Empty)` — отправил один ChatMessage, получил один Empty
+- `rpc Subscribe (SubscribeRequest) returns (stream ChatMessage)` — отправил один SubscribeRequest, получаешь поток ChatMessage
+- `rpc Chat (stream ChatMessage) returns (stream ChatMessage)` — двусторонний поток: и шлёшь, и получаешь поток
+
+---
+
+## Как читать message
+
+Сообщение — это набор полей. Каждое поле: **тип**, **имя**, **номер**.
+
+```protobuf
+message SubscribeRequest {
+  string user_id  = 1;
+  string username = 2;
+  string room     = 3;
+}
+```
+
+**Что это значит:** чтобы вызвать метод, который принимает `SubscribeRequest`, нужно отправить объект с полями `user_id`, `username`, `room` (все `string`).
+
+В TypeScript после генерации:
+```typescript
+create(SubscribeRequestSchema, {
+  userId: "uuid-123",   // snake_case → camelCase
+  username: "Alice",
+  room: "general",
+});
+```
+
+---
+
+## Типы данных в proto
+
+| Proto-тип | TypeScript | Пример значения |
+|-----------|------------|-----------------|
+| `string` | `string` | `"hello"` |
+| `int32`, `int64` | `number` / `bigint` | `42` или `42n` |
+| `bool` | `boolean` | `true` |
+| `bytes` | `Uint8Array` | `new Uint8Array([1,2,3])` |
+| `message` | объект этого типа | `{ filename: "a.pdf" }` |
+
+> ⚠️ В protoc-gen-es v2 поле `int64` маппится на `bigint`. Используй `BigInt(Date.now())` и `0n`.
+
+### Вложенные сообщения
+
+```protobuf
+message FileChunk {
+  FileInfo info = 1;   // info — это вложенное сообщение FileInfo
+  bytes    data = 2;
+}
+```
+
+Для `info` нужно передать объект типа `FileInfo`:
+```typescript
+create(FileChunkSchema, {
+  info: create(FileInfoSchema, {
+    filename: "photo.jpg",
+    mimeType: "image/jpeg",
+    room: "general",
+    // ...
+  }),
+  data: new Uint8Array(0),
+});
+```
+
+---
+
+## Номера полей (1, 2, 3...)
+
+Номера — это **идентификаторы** полей в бинарном формате. Их нельзя менять после релиза — иначе сломается совместимость.
+
+```protobuf
+message User {
+  string name = 1;   // номер 1 навсегда закреплён за name
+  string email = 2;
+}
+```
+
+Для чтения proto номера не важны — смотри на имена и типы. Но знать, что они есть, полезно.
+
+---
+
+## Практика: разбор chat.proto
+
+### 1. Subscribe — подписка на комнату
+
+```protobuf
+rpc Subscribe (SubscribeRequest) returns (stream ChatMessage);
+```
+
+**Что отправляем:** один `SubscribeRequest`
+
+```protobuf
+message SubscribeRequest {
+  string user_id  = 1;
+  string username = 2;
+  string room     = 3;
+}
+```
+
+| Поле | Тип | Кто заполняет | Пример |
+|------|-----|---------------|--------|
+| user_id | string | Клиент (UUID) | `crypto.randomUUID()` |
+| username | string | Клиент | `"Alice"` |
+| room | string | Клиент | `"general"` |
+
+**Что получаем:** поток `ChatMessage` — сервер присылает сообщения по мере появления.
+
+---
+
+### 2. SendMessage — отправить текст
+
+```protobuf
+rpc SendMessage (ChatMessage) returns (Empty);
+```
+
+**Что отправляем:** один `ChatMessage`
+
+```protobuf
+message ChatMessage {
+  string user_id    = 1;
+  string username   = 2;
+  string text       = 3;
+  int64  timestamp  = 4;
+  string room       = 5;
+  bool   join       = 6;
+  bool   leave      = 7;
+  FileInfo file     = 8;
+}
+```
+
+Для обычного текстового сообщения заполняем:
+
+| Поле | Обязательно | Пример |
+|------|-------------|--------|
+| user_id | да | `userIdRef.current` |
+| username | да | `"Alice"` |
+| text | да | `"Привет!"` |
+| timestamp | да | `BigInt(Date.now())` |
+| room | да | `"general"` |
+| join | нет | `false` (по умолчанию) |
+| leave | нет | `false` |
+| file | нет | не заполняем |
+
+**Что получаем:** `Empty` — пустой объект, подтверждение.
+
+---
+
+### 3. UploadChunk — загрузить чанк файла
+
+```protobuf
+rpc UploadChunk (FileChunk) returns (UploadChunkResponse);
+```
+
+**Что отправляем:** один `FileChunk` (вызов повторяется много раз — по чанкам)
+
+```protobuf
+message FileChunk {
+  FileInfo info     = 1;
+  bytes    data     = 2;
+  int32    chunk_seq = 3;
+  bool     is_last   = 4;
+  string   upload_id = 5;
+}
+```
+
+**Первый чанк** (chunk_seq = 0):
+| Поле | Значение |
+|------|----------|
+| upload_id | UUID от клиента |
+| chunk_seq | 0 |
+| is_last | false |
+| info | FileInfo (filename, mimeType, room, userId, username, timestamp) |
+| data | пустой `new Uint8Array(0)` |
+
+**Следующие чанки** (chunk_seq = 1, 2, 3...):
+| Поле | Значение |
+|------|----------|
+| upload_id | тот же UUID |
+| chunk_seq | 1, 2, 3... |
+| is_last | true только в последнем |
+| data | срез файла (512 KB) |
+| info | не заполняем |
+
+**Что получаем:** `UploadChunkResponse` — в последнем чанке содержит `file_info` с `file_id` от сервера.
+
+---
+
+### 4. DownloadFile — скачать файл
+
+```protobuf
+rpc DownloadFile (FileRequest) returns (stream FileChunk);
+```
+
+**Что отправляем:** один `FileRequest`
+
+```protobuf
+message FileRequest {
+  string file_id = 1;
+}
+```
+
+| Поле | Откуда | Пример |
+|------|--------|--------|
+| file_id | Из `FileInfo` после загрузки | `"a1b2c3d4-..."` |
+
+**Что получаем:** поток `FileChunk` — первый с `info` (метаданные), остальные с `data` (байты).
+
+---
+
+## Шпаргалка: как понять что отправлять
+
+1. **Найди RPC** в `service` — какой метод вызываешь.
+2. **Посмотри тип входа** — `(SubscribeRequest)` значит, что отправляешь `SubscribeRequest`.
+3. **Открой message** с этим именем — там список полей.
+4. **Заполни поля** по типам и назначению (из комментариев или логики сервера).
+5. **Проверь stream** — если `returns (stream X)`, получаешь `AsyncIterable<X>`, итерируешь через `for await`.
+
+---
+
+## Схема: от proto к коду
+
+```
+.proto                          TypeScript (после buf generate)
+─────────────────────────────────────────────────────────────────
+message User {                  type User = { ... }
+  string name = 1;       →      UserSchema (для create)
+  int32 age = 2;               }
+
+rpc GetUser(GetUserRequest)     client.getUser(request)
+  returns (User)          →     → Promise<User>
+
+rpc Subscribe(SubscribeRequest) client.subscribe(request)
+  returns (stream ChatMessage)  → AsyncIterable<ChatMessage>
+```
+
+---
+
+## Частые вопросы
+
+**Q: Поле обязательно или можно не передавать?**  
+В proto3 все поля опциональны по умолчанию. Но сервер может требовать заполнения — смотри логику или документацию.
+
+**Q: Что такое Empty?**  
+Пустое сообщение `message Empty {}` — используется когда ответ не нужен, только подтверждение.
+
+**Q: Как передать массив?**  
+`repeated string items = 1;` — в TypeScript это `string[]`.
+
+**Q: Что если не знаю какой-то тип?**  
+Ищи его в том же .proto файле — он объявлен как `message` выше или ниже.

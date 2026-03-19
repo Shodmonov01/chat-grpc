@@ -1,5 +1,10 @@
-version: v1
+version: v2
+inputs:
+  - directory: .
+    paths:
+      - proto
 plugins:
-  - plugin: es
+  - local: protoc-gen-es
     out: src/gen
-    opt: target=ts
+    opt:
+      - target=ts
