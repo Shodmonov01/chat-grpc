@@ -1,8 +1,497 @@
 npm run dev - для запуска
 npm test  - для тестинга
 
-# Загрузить файл в комнату "general"
-node file-client.js upload ./photo.jpg general Alice
+# gRPC, ConnectRPC и работа с .proto файлами
 
-# Скачать по ID (возвращается после upload)
-node file-client.js download <file_id> ./output.jpg
+## Введение
+
+Когда мы строим взаимодействие между фронтендом и бэкендом, чаще всего используется REST API с JSON.  
+Однако у такого подхода есть ряд проблем:
+
+- слабая типизация
+- дублирование интерфейсов на фронтенде
+- высокая вероятность ошибок в строковых URL
+- избыточный размер передаваемых данных
+
+Альтернативой является **gRPC** — подход, основанный на Remote Procedure Call (RPC), где клиент вызывает методы сервера как обычные функции.
+
+---
+
+## Что такое gRPC
+
+gRPC — это технология удаленного вызова процедур (RPC), разработанная для эффективного взаимодействия между сервисами.
+
+Вместо JSON или XML используется **Protocol Buffers (protobuf)**.
+
+### Основные идеи:
+
+- Контракт описывается в `.proto` файле
+- Строгая типизация
+- Генерация кода для клиента и сервера
+- Высокая производительность за счет бинарного формата
+
+### Виды вызовов в gRPC:
+
+| Тип | Запрос | Ответ | Когда использовать |
+|-----|--------|-------|--------------------|
+| **Unary** | один | один | обычные запросы данных |
+| **Server Streaming** | один | поток | realtime-обновления, логи |
+| **Client Streaming** | поток | один | загрузка файлов, метрики |
+| **Bidirectional** | поток | поток | чат, совместное редактирование |
+
+---
+
+## Проблема gRPC в браузере
+
+Несмотря на преимущества, классический gRPC плохо работает в браузерах.
+
+**Причина:**
+- gRPC использует возможности HTTP/2 на низком уровне
+- браузеры не дают полного доступа к фреймам HTTP/2
+- браузер не умеет формировать тот формат запроса, который ожидает классический gRPC-сервер
+
+---
+
+## Решение: gRPC-Web
+
+Чтобы обойти ограничения браузера, используется **gRPC-Web**.
+
+```
+Браузер → gRPC-Web → Proxy (Envoy) → gRPC сервер
+```
+
+Proxy (например Envoy):
+- принимает запросы от браузера
+- преобразует их в полноценный gRPC
+- отправляет на сервер
+
+**Минусы:**
+- дополнительная инфраструктура (прокси)
+- усложнение архитектуры
+
+---
+
+## Современное решение: ConnectRPC
+
+**ConnectRPC** — это более современный подход, который решает проблему без прокси.
+
+```
+Браузер → ConnectRPC → сервер (напрямую)
+```
+
+**Ключевые преимущества:**
+- работает через стандартный `fetch API`
+- не требует прокси
+- совместим с HTTP/1.1 и HTTP/2
+- запросы видны в DevTools и воспроизводимы через `curl`
+- поддерживает три протокола: Connect, gRPC-Web, gRPC
+
+---
+
+## Роль `.proto` файлов
+
+`.proto` файлы — это единый контракт между клиентом и сервером.
+
+Они описывают:
+- структуры данных (`message`)
+- методы (`service` + `rpc`)
+
+```protobuf
+syntax = "proto3";
+
+package user.v1;
+
+message GetUserRequest {
+  int32 id = 1;
+}
+
+message User {
+  int32 id = 1;
+  string name = 2;
+  string email = 3;
+}
+
+message ListUsersRequest {}
+
+message ListUsersResponse {
+  User user = 1;
+}
+
+service UserService {
+  // Unary — один запрос, один ответ
+  rpc GetUser(GetUserRequest) returns (User);
+
+  // Server Streaming — один запрос, поток ответов
+  rpc ListUsers(ListUsersRequest) returns (stream ListUsersResponse);
+}
+```
+
+### Почему `.proto` лучше, чем Swagger
+
+| | Swagger / OpenAPI | Protobuf + ConnectRPC |
+|---|---|---|
+| Типизация | ручная, через codegen | автоматическая |
+| Контракт | описание HTTP | описание методов |
+| Производительность | JSON (текст) | Binary (бинарный) |
+| Версионирование | в URL `/v1/` | в package `user.v1` |
+| Инструменты | много, разные | единый `buf` |
+
+---
+
+## Buf — инструмент для работы с protobuf
+
+**Buf** — современный CLI для компиляции, линтинга и управления `.proto` файлами.
+
+### Установка
+
+```bash
+# macOS
+brew install bufbuild/buf/buf
+
+# Linux / Windows (через npm)
+npm install --save-dev @bufbuild/buf
+
+# Проверка
+buf --version
+```
+
+### Структура проекта
+
+```
+my-app/
+├── proto/
+│   └── user/
+│       └── v1/
+│           └── user.proto
+├── src/
+│   └── gen/           ← сюда будет генерироваться код
+├── buf.yaml
+└── buf.gen.yaml
+```
+
+### buf.yaml — описание модуля
+
+```yaml
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - DEFAULT
+breaking:
+  use:
+    - FILE
+```
+
+### buf.gen.yaml — правила генерации кода
+
+```yaml
+version: v2
+plugins:
+  # Генерирует TypeScript типы (message, enum)
+  - plugin: buf.build/bufbuild/es
+    out: src/gen
+    opt: target=ts
+
+  # Генерирует клиент ConnectRPC
+  - plugin: buf.build/connectrpc/es
+    out: src/gen
+    opt: target=ts
+```
+
+### Установка npm-зависимостей для генерации
+
+```bash
+npm install --save-dev @bufbuild/protoc-gen-es @connectrpc/protoc-gen-connect-es
+npm install @bufbuild/protobuf @connectrpc/connect @connectrpc/connect-web
+```
+
+### Запуск генерации
+
+```bash
+# Генерировать TypeScript из .proto
+buf generate
+
+# Проверить качество схем (lint)
+buf lint
+
+# Проверить на breaking changes
+buf breaking --against '.git#branch=main'
+```
+
+После `buf generate` в `src/gen/` появятся файлы:
+
+```
+src/gen/
+└── user/
+    └── v1/
+        ├── user_pb.ts        ← типы: User, GetUserRequest, ...
+        └── user_connect.ts   ← сервис: UserService
+```
+
+---
+
+## Модули и сущности `@connectrpc/connect-web`
+
+Пакет `@connectrpc/connect-web` отвечает за транспортный слой в браузере.
+
+### Основные сущности
+
+#### `createConnectTransport`
+Транспорт, использующий протокол Connect поверх HTTP.  
+Подходит для большинства проектов — работает с HTTP/1.1 и HTTP/2.
+
+```typescript
+import { createConnectTransport } from "@connectrpc/connect-web";
+
+const transport = createConnectTransport({
+  baseUrl: "https://api.example.com",
+});
+```
+
+#### `createGrpcWebTransport`
+Транспорт, совместимый с gRPC-Web.  
+Нужен если бэкенд не поддерживает протокол Connect, но поддерживает gRPC-Web.
+
+```typescript
+import { createGrpcWebTransport } from "@connectrpc/connect-web";
+
+const transport = createGrpcWebTransport({
+  baseUrl: "https://api.example.com",
+});
+```
+
+
+#### `createClient`
+Создаёт типизированный клиент из сгенерированного сервиса.
+
+```typescript
+import { createClient } from "@connectrpc/connect";
+import { UserService } from "./gen/user/v1/user_connect";
+
+const client = createClient(UserService, transport);
+```
+
+#### `ConnectError`
+Класс ошибок ConnectRPC. Содержит `code` (статус) и `message`.
+
+```typescript
+import { ConnectError, Code } from "@connectrpc/connect";
+
+try {
+  const user = await client.getUser({ id: 1 });
+} catch (err) {
+  if (err instanceof ConnectError) {
+    console.log(err.code);    // Code.NotFound, Code.Unauthenticated, ...
+    console.log(err.message); // текст ошибки от сервера
+  }
+}
+```
+
+#### Коды ошибок (`Code`)
+
+| Код | Значение |
+|-----|----------|
+| `Code.NotFound` | ресурс не найден |
+| `Code.Unauthenticated` | не авторизован |
+| `Code.PermissionDenied` | нет прав |
+| `Code.InvalidArgument` | неверные аргументы |
+| `Code.Unavailable` | сервис недоступен |
+| `Code.Internal` | внутренняя ошибка сервера |
+
+---
+
+## Использование с React + TypeScript
+
+### Унарный вызов (Unary)
+
+Обычный запрос — один вызов, один результат.
+
+```typescript
+// hooks/useUser.ts
+import { useEffect, useState } from "react";
+import { createClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { ConnectError } from "@connectrpc/connect";
+import { UserService } from "../gen/user/v1/user_connect";
+import { User } from "../gen/user/v1/user_pb";
+
+const transport = createConnectTransport({
+  baseUrl: "http://localhost:8080",
+});
+
+const client = createClient(UserService, transport);
+
+export function useUser(id: number) {
+  const [user, setUser] = useState<User | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    client
+      .getUser({ id })
+      .then(setUser)
+      .catch((err) => {
+        if (err instanceof ConnectError) {
+          setError(`[${err.code}] ${err.message}`);
+        } else {
+          setError("Неизвестная ошибка");
+        }
+      })
+      .finally(() => setLoading(false));
+  }, [id]);
+
+  return { user, error, loading };
+}
+```
+
+```tsx
+// components/UserCard.tsx
+import { useUser } from "../hooks/useUser";
+
+export function UserCard({ id }: { id: number }) {
+  const { user, error, loading } = useUser(id);
+
+  if (loading) return <p>Загрузка...</p>;
+  if (error) return <p>Ошибка: {error}</p>;
+  if (!user) return null;
+
+  return (
+    <div>
+      <h2>{user.name}</h2>
+      <p>{user.email}</p>
+    </div>
+  );
+}
+```
+
+---
+
+### Server Streaming
+
+Сервер отправляет несколько ответов на один запрос — удобно для realtime-обновлений, логов, прогресса.
+
+```typescript
+// hooks/useUserStream.ts
+import { useEffect, useState } from "react";
+import { createClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { UserService } from "../gen/user/v1/user_connect";
+import { User } from "../gen/user/v1/user_pb";
+
+const transport = createConnectTransport({
+  baseUrl: "http://localhost:8080",
+});
+
+const client = createClient(UserService, transport);
+
+export function useUserStream() {
+  const [users, setUsers] = useState<User[]>([]);
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    // AbortController позволяет отменить стрим при размонтировании
+    const controller = new AbortController();
+
+    async function startStream() {
+      try {
+        // client.listUsers() возвращает AsyncIterable
+        for await (const response of client.listUsers(
+          {},
+          { signal: controller.signal }
+        )) {
+          if (response.user) {
+            setUsers((prev) => [...prev, response.user!]);
+          }
+        }
+        setDone(true);
+      } catch (err) {
+        // AbortError — нормальное завершение при размонтировании
+        if (err instanceof Error && err.name !== "AbortError") {
+          console.error("Stream error:", err);
+        }
+      }
+    }
+
+    startStream();
+
+    return () => controller.abort(); // отмена при размонтировании
+  }, []);
+
+  return { users, done };
+}
+```
+
+```tsx
+// components/UserList.tsx
+import { useUserStream } from "../hooks/useUserStream";
+
+export function UserList() {
+  const { users, done } = useUserStream();
+
+  return (
+    <div>
+      <h2>Пользователи {done ? `(${users.length})` : "— загрузка..."}</h2>
+      <ul>
+        {users.map((user) => (
+          <li key={user.id}>
+            {user.name} — {user.email}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+```
+
+**Ключевые моменты в Server Streaming:**
+
+- клиент получает `AsyncIterable` — итерируем через `for await...of`
+- `AbortController` + `signal` позволяет корректно прерывать стрим
+- `return () => controller.abort()` в `useEffect` — важен для предотвращения утечек памяти
+
+---
+
+## Архитектура: как всё связано
+
+```
+.proto файл (единый контракт)
+        │
+        ▼
+   buf generate
+        │
+   ┌────┴────────────┐
+   │                 │
+*_pb.ts          *_connect.ts
+(типы данных)    (описание сервиса)
+        │
+        ▼
+  createClient(UserService, transport)
+        │
+   ┌────┴──────────────────────┐
+   │                           │
+Unary вызов              Server Streaming
+client.getUser(...)      for await...of client.listUsers(...)
+        │                           │
+   Promise<User>           AsyncIterable<Response>
+```
+
+---
+
+## Итог
+
+| Технология | Транспорт | Прокси | Браузер |
+|---|---|---|---|
+| gRPC | HTTP/2 бинарный | не нужен | ❌ |
+| gRPC-Web | HTTP/1.1 + бинарный | нужен (Envoy) | ✅ |
+| ConnectRPC | HTTP/1.1 или HTTP/2 | не нужен | ✅ |
+
+## Вывод
+
+Использование `.proto` + ConnectRPC + Buf даёт:
+
+- **строгую типизацию** — типы генерируются из контракта, не пишутся руками
+- **единый контракт** — фронт и бэк работают по одному источнику правды
+- **упрощённую архитектуру** — нет прокси, нет Envoy
+- **удобную отладку** — запросы видны в DevTools, воспроизводятся через `curl`
+- **realtime из коробки** — Server Streaming без WebSocket и доп. инфраструктуры
